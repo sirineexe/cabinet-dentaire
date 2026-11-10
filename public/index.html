@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cabinet Dentaire - Gestion des Rendez-vous</title>
+  <link rel="stylesheet" href="css/app.css">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0284c7">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%230284c7'><path d='M12 2C8.5 2 6 4.5 6 7c0 2 .8 4.2 1.5 6.5C8.8 17.5 9 22 12 22s3.2-4.5 4.5-8.5C17.2 11.2 18 9 18 7c0-2.5-2.5-5-6-5zm-1 4h2v2h2v2h-2v2h-2v-2H9V8h2V6z'/></svg>">
+</head>
+<body>
+
+  <!-- ============================================================= -->
+  <!-- TOP HEADER & REALTIME BAR -->
+  <!-- ============================================================= -->
+  <header class="top-header">
+    <div class="header-container">
+      
+      <!-- Brand & Title -->
+      <div class="brand-section">
+        <div class="brand-logo">
+          <!-- Dental Tooth SVG Icon -->
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C8.5 2 6 4.5 6 7c0 2 .8 4.2 1.5 6.5C8.8 17.5 9 22 12 22s3.2-4.5 4.5-8.5C17.2 11.2 18 9 18 7c0-2.5-2.5-5-6-5zm-1 4h2v2h2v2h-2v2h-2v-2H9V8h2V6z"/>
+          </svg>
+        </div>
+        <div class="brand-info">
+          <h1 id="header-cabinet-name">Cabinet Dentaire</h1>
+          <p>Système Multi-postes de Gestion Médicale</p>
+        </div>
+      </div>
+
+      <!-- Date Navigator -->
+      <div class="header-center">
+        <button class="date-nav-btn" id="btn-prev-day" title="Jour précédent">◀</button>
+        <button class="date-nav-btn" id="btn-today">Aujourd'hui</button>
+        <button class="date-nav-btn" id="btn-next-day" title="Jour suivant">▶</button>
+        <input type="date" id="current-date" class="current-date-picker">
+      </div>
+
+      <!-- Operator Switcher & Actions -->
+      <div class="header-right">
+        <!-- Live Real-time Status -->
+        <div class="live-indicator" id="live-indicator">
+          <span class="live-dot"></span>
+          <span>En direct</span>
+        </div>
+
+        <!-- User / Session Operator Switcher -->
+        <div class="user-selector-wrap" title="Changer d'utilisateur">
+          <span>👤</span>
+          <select id="operator-select" class="user-selector">
+            <option value="Secrétariat">Secrétariat</option>
+            <option value="Dr. Benali">Dr. Benali</option>
+            <option value="Dr. Khelil">Dr. Khelil</option>
+            <option value="Administrateur">Administrateur</option>
+          </select>
+        </div>
+
+        <!-- Prominent New Appointment Button -->
+        <button class="btn-new-rdv" id="btn-new-rdv">
+          <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"></path>
+          </svg>
+          Prendre RDV
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ============================================================= -->
+  <!-- NAVIGATION TABS (MATCHING SPREADSHEET STRUCTURE) -->
+  <!-- ============================================================= -->
+  <nav class="nav-tabs-bar">
+    <div class="tabs-container">
+      <button class="tab-btn active" data-tab="disponibilites">
+        <span>🟢 Disponibilités</span>
+      </button>
+      <button class="tab-btn" data-tab="jour">
+        <span>📅 Jour</span>
+      </button>
+      <button class="tab-btn" data-tab="semaine">
+        <span>🗓️ Semaine</span>
+      </button>
+      <button class="tab-btn" data-tab="mois">
+        <span>📊 Mois & Stats</span>
+      </button>
+      <button class="tab-btn" data-tab="rappels">
+        <span>📞 Rappels de veille</span>
+      </button>
+      <button class="tab-btn" data-tab="registre">
+        <span>📑 Registre des RDV</span>
+      </button>
+      <button class="tab-btn" data-tab="controles">
+        <span>🛡️ Contrôles</span>
+        <span class="tab-badge badge-alert" id="alerts-count-badge" style="display:none;">0</span>
+      </button>
+      <button class="tab-btn" data-tab="parametres">
+        <span>⚙️ Paramètres</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- Print Header for Physical Printing -->
+  <div id="print-header" class="print-header"></div>
+
+  <!-- ============================================================= -->
+  <!-- MAIN CONTENT CONTAINER -->
+  <!-- ============================================================= -->
+  <main class="main-content">
+
+    <!-- ----------------------------------------------------------- -->
+    <!-- VUE 1: DISPONIBILITÉS -->
+    <!-- ----------------------------------------------------------- -->
+    <section id="panel-disponibilites" class="tab-panel active">
+      <div class="panel-card">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <h2 style="font-size: 1.2rem; font-weight: 700;">Grille des Disponibilités du Jour</h2>
+            <span id="disp-date-display" style="color: var(--text-muted); font-weight: 600;"></span>
+          </div>
+          <div class="toolbar-right">
+            <label style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted);">Filtrer par praticien :</label>
+            <select id="disp-dentist-filter" class="form-select" style="width: auto;">
+              <option value="">Tous les praticiens</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- KPI Cards -->
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-icon icon-free">✓</div>
+            <div class="kpi-data">
+              <h3>Créneaux Libres</h3>
+              <p id="kpi-free-slots">-</p>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-icon icon-occupied">⏳</div>
+            <div class="kpi-data">
+              <h3>Créneaux Occupés</h3>
+              <p id="kpi-occupied-slots">-</p>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-icon icon-first">⏱️</div>
+            <div class="kpi-data">
+              <h3>Premier Créneau Libre</h3>
+              <p id="kpi-first-free" style="font-size: 1.25rem;">-</p>
+            </div>
+          </div>
+        </div>
+
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
+          💡 <em>Cliquez sur n'importe quel créneau vert pour réserver instantanément un rendez-vous. Cliquez sur un créneau rouge pour voir ou modifier le rendez-vous.</em>
+        </p>
+
+        <!-- Slots Tiles Matrix -->
+        <div id="slots-grid" class="slots-matrix-grid">
+          <!-- Rendered dynamically -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------- -->
+    <!-- VUE 2: JOUR (AGENDA DETAILLÉ DU JOUR) -->
+    <!-- ----------------------------------------------------------- -->
+    <section id="panel-jour" class="tab-panel">
+      <div class="panel-card">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <h2 style="font-size: 1.2rem; font-weight: 700;">Planning du Jour</h2>
+            <span id="day-date-display" style="font-weight: 600; color: var(--text-muted);"></span>
+            <span class="tab-badge" style="background:#e0f2fe; color:#0369a1;"><span id="day-rdv-count">0</span> RDV</span>
+            <span class="tab-badge" style="background:#f0fdf4; color:#166534;"><span id="day-free-count">0</span> libres</span>
+          </div>
+          <div class="toolbar-right">
+            <select id="day-dentist-filter" class="form-select" style="width: auto;">
+              <option value="">Tous les praticiens</option>
+            </select>
+            <button id="btn-print-day" class="btn-secondary" style="display:flex; align-items:center; gap:0.4rem;">
+              🖨️ Imprimer la feuille du jour
+            </button>
+          </div>
+        </div>
+
+        <table class="day-timeline-table">
+          <thead>
+            <tr>
+              <th style="width: 100px;">Heure</th>
+              <th>Patient</th>
+              <th style="width: 150px;">Téléphone</th>
+              <th style="width: 200px;">Motif</th>
+              <th style="width: 160px;">Dentiste</th>
+              <th style="width: 130px;">Statut</th>
+              <th style="width: 180px;">Actions rapides</th>
+            </tr>
+          </thead>
+          <tbody id="day-agenda-body">
+            <!-- Dynamic rows -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------- -->
+    <!-- VUE 3: SEMAINE (7 JOURS CÔTE À CÔTE) -->
+    <!-- ----------------------------------------------------------- -->
+    <section id="panel-semaine" class="tab-panel">
+      <div class="panel-card">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <h2 style="font-size: 1.2rem; font-weight: 700;">Vue Hebdomadaire</h2>
+            <span id="week-range-display" style="font-weight: 600; color: var(--text-muted);"></span>
+          </div>
+        </div>
+
+        <div class="week-grid-container">
+          <table class="week-table">
+            <thead>
+              <tr id="week-header-row">
+                <!-- Headers rendered dynamically -->
+              </tr>
+            </thead>
+            <tbody id="week-body-rows">
+              <!-- Body rows rendered dynamically -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------- -->
+    <!-- VUE 4: MOIS & STATISTIQUES -->
+    <!-- ----------------------------------------------------------- -->
+    <section id="panel-mois" class="tab-panel">
+      <div class="panel-card">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <button class="date-nav-btn" id="btn-prev-month">◀ Mois précédent</button>
+            <h2 id="month-display-title" style="font-size: 1.2rem; font-weight: 700; margin: 0 0.5rem;"></h2>
+            <button class="date-nav-btn" id="btn-next-month">Mois suivant ▶</button>
+          </div>
+          <div class="toolbar-right">
+            <span style="font-size: 0.8rem; color: var(--text-muted); display:flex; align-items:center; gap:0.5rem;">
+              <span class="month-rdv-badge badge-normal">1-7 RDV (Bleu)</span>
+              <span class="month-rdv-badge badge-heavy">8+ RDV (Orange)</span>
+            </span>
+          </div>
+        </div>
+
+        <!-- Month Calendar Grid -->
+        <div id="month-grid" class="month-calendar-grid">
+          <!-- Dynamically populated -->
+        </div>
+
+        <!-- Monthly Statistics Dashboard (From User Sheet) -->
+        <h3 style="font-size: 1.05rem; font-weight: 700; margin: 1.5rem 0 0.75rem 0; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+          📈 Statistiques du Mois
+        </h3>
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-icon icon-neutral">📋</div>
+            <div class="kpi-data">
+              <h3>RDV Prévus</h3>
+              <p id="stat-total-prevus">0</p>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-icon icon-free">✅</div>
+            <div class="kpi-data">
+              <h3>Patients Venus</h3>
+              <p id="stat-venus">0</p>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-icon icon-occupied">❌</div>
+            <div class="kpi-data">
+              <h3>Absents</h3>
+              <p id="stat-absents">0</p>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-icon icon-warning">🚫</div>
+            <div class="kpi-data">
+              <h3>Annulés / Reportés</h3>
+              <p><span id="stat-annules">0</span> / <span id="stat-reportes">0</span></p>
+            </div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-icon icon-occupied">📊</div>
+            <div class="kpi-data">
+              <h3>Taux d'absence</h3>
+              <p id="stat-taux-absence" style="color:var(--danger);">0.0%</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------- -->
+    <!-- VUE 5: RAPPELS DE VEILLE -->
+    <!-- ----------------------------------------------------------- -->
+    <section id="panel-rappels" class="tab-panel">
+      <div class="panel-card">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <h2 style="font-size: 1.2rem; font-weight: 700;">Patients à Rappeler</h2>
+            <span class="tab-badge" id="rappel-count-badge">0 patient(s)</span>
+          </div>
+          <div class="toolbar-right">
+            <label style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted);">Date des rendez-vous :</label>
+            <input type="date" id="rappel-target-date" class="form-input" style="width: auto;">
+          </div>
+        </div>
+
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.25rem;">
+          Rappels prévus pour le <strong><span id="rappel-target-label">-</span></strong>. Vous pouvez envoyer un SMS/WhatsApp pré-rempli en 1 clic ou cliquer sur le numéro pour téléphoner. Cochez la case une fois l'appel passé.
+        </p>
+
+        <div id="rappels-list" style="border: 1px solid var(--border-color); border-radius: var(--radius-md); overflow: hidden; background:#ffffff;">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------- -->
+    <!-- VUE 6: REGISTRE DES RENDEZ-VOUS & RECHERCHE -->
+    <!-- ----------------------------------------------------------- -->
+    <section id="panel-registre" class="tab-panel">
+      <div class="panel-card">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <input type="text" id="search-appointments" class="form-input" placeholder="🔍 Rechercher par nom, prénom, tél, motif..." style="min-width: 320px;">
+            <select id="search-status-filter" class="form-select" style="width: auto;">
+              <option value="">Tous les statuts</option>
+              <option value="À confirmer">À confirmer</option>
+              <option value="Confirmé">Confirmé</option>
+              <option value="Venu">Venu</option>
+              <option value="Absent">Absent</option>
+              <option value="Annulé">Annulé</option>
+              <option value="Reporté">Reporté</option>
+            </select>
+            <select id="search-dentist-filter" class="form-select" style="width: auto;">
+              <option value="">Tous les praticiens</option>
+            </select>
+          </div>
+          <div class="toolbar-right">
+            <span id="registre-count-display" style="font-size: 0.85rem; font-weight: 600; color: var(--text-muted);"></span>
+            <button id="btn-export-csv" class="btn-secondary" style="display:flex; align-items:center; gap:0.4rem;">
+              📥 Exporter vers Excel (CSV)
+            </button>
+          </div>
+        </div>
+
+        <div style="overflow-x: auto;">
+          <table class="day-timeline-table">
+            <thead>
+              <tr>
+                <th style="width: 120px;">Date</th>
+                <th style="width: 140px;">Horaires</th>
+                <th>Patient</th>
+                <th style="width: 140px;">Téléphone</th>
+                <th>Motif</th>
+                <th style="width: 140px;">Dentiste</th>
+                <th style="width: 120px;">Statut</th>
+                <th style="width: 140px;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="registre-table-body">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------- -->
+    <!-- VUE 7: CONTRÔLES, CONFLITS & AUDIT -->
+    <!-- ----------------------------------------------------------- -->
+    <section id="panel-controles" class="tab-panel">
+      <div class="panel-card">
+        <h2 style="font-size: 1.2rem; font-weight: 700; margin-bottom: 0.5rem;">Contrôle d'Intégrité & Sécurité du Cabinet</h2>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.5rem;">
+          Ce module analyse la base de données en permanence pour garantir la fiabilité des dossiers, empêcher les chevauchements et assurer la mise à jour des statuts.
+        </p>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-bottom: 1.5rem;">
+          <!-- Overdue Status Box -->
+          <div style="border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 1.25rem; background: #ffffff;">
+            <h3 style="font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem; color: #b45309;">
+              ⏳ Rendez-vous passés avec statut non clôturé
+            </h3>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem;">
+              Rendez-vous antérieurs à aujourd'hui qui sont encore marqués « À confirmer » ou « Confirmé » :
+            </p>
+            <div id="controles-overdue-list" style="max-height: 250px; overflow-y: auto;"></div>
+          </div>
+
+          <!-- Missing Phone Numbers -->
+          <div style="border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 1.25rem; background: #ffffff;">
+            <h3 style="font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem; color: #dc2626;">
+              📞 Téléphones manquants
+            </h3>
+            <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem;">
+              Patients dont le numéro de téléphone est vide ou incomplet :
+            </p>
+            <div id="controles-missing-phone-list" style="max-height: 250px; overflow-y: auto;"></div>
+          </div>
+        </div>
+
+        <!-- Overlap Conflicts -->
+        <div style="border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 1.25rem; background: #ffffff; margin-bottom: 1.5rem;">
+          <h3 style="font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem; color: #991b1b;">
+            ⚠️ Conflits d'horaires & Chevauchements
+          </h3>
+          <div id="controles-conflicts-list"></div>
+        </div>
+
+        <!-- Audit Log -->
+        <div style="border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: 1.25rem; background: #ffffff;">
+          <h3 style="font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem;">
+            📜 Journal d'Audit & Traçabilité Multi-postes
+          </h3>
+          <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem;">
+            Historique chronologique des actions effectuées sur le logiciel par les différents utilisateurs :
+          </p>
+          <div id="audit-logs-list" style="max-height: 250px; overflow-y: auto;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ----------------------------------------------------------- -->
+    <!-- VUE 8: PARAMÈTRES DU CABINET -->
+    <!-- ----------------------------------------------------------- -->
+    <section id="panel-parametres" class="tab-panel">
+      <div class="panel-card">
+        <h2 style="font-size: 1.2rem; font-weight: 700; margin-bottom: 1rem;">Paramètres du Cabinet & Configuration</h2>
+        
+        <form id="form-settings" style="max-width: 800px;">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Nom du Cabinet (affiché en haut et sur les impressions) :</label>
+              <input type="text" id="set-cabinet-name" class="form-input" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Numéro de Téléphone du Cabinet :</label>
+              <input type="text" id="set-cabinet-phone" class="form-input">
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Heure d'ouverture (1er créneau) :</label>
+              <input type="time" id="set-opening-time" class="form-input" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Heure de fermeture (fin du dernier créneau) :</label>
+              <input type="time" id="set-closing-time" class="form-input" required>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Durée d'un créneau par défaut (minutes) :</label>
+              <select id="set-slot-duration" class="form-select">
+                <option value="15">15 minutes</option>
+                <option value="20">20 minutes</option>
+                <option value="30">30 minutes (Recommandé)</option>
+                <option value="45">45 minutes</option>
+                <option value="60">60 minutes</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Premier jour de la semaine :</label>
+              <select id="set-first-day" class="form-select">
+                <option value="Dimanche">Dimanche (Standard)</option>
+                <option value="Lundi">Lundi</option>
+                <option value="Samedi">Samedi</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Jour de fermeture n°1 :</label>
+              <select id="set-closed-1" class="form-select">
+                <option value="Vendredi">Vendredi</option>
+                <option value="Samedi">Samedi</option>
+                <option value="Dimanche">Dimanche</option>
+                <option value="">Aucun</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Jour de fermeture n°2 (facultatif) :</label>
+              <select id="set-closed-2" class="form-select">
+                <option value="">Aucun</option>
+                <option value="Samedi">Samedi</option>
+                <option value="Dimanche">Dimanche</option>
+                <option value="Vendredi">Vendredi</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group" style="max-width: 380px;">
+            <label class="form-label">Délai pour les rappels de patients (jours à l'avance) :</label>
+            <input type="number" id="set-reminder-days" class="form-input" min="1" max="7" value="1">
+            <span style="font-size:0.75rem; color:var(--text-muted);">1 = on rappelle les patients la veille.</span>
+          </div>
+
+          <button type="submit" class="btn-primary" style="margin-top: 0.5rem;">💾 Enregistrer les modifications</button>
+        </form>
+
+        <!-- Dentists Management -->
+        <div style="margin-top: 2.5rem; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
+          <div class="toolbar">
+            <h3 style="font-size: 1.05rem; font-weight: 700;">👨‍⚕️ Praticiens & Dentistes du Cabinet</h3>
+            <button class="btn-secondary" id="btn-add-dentist">+ Ajouter un dentiste</button>
+          </div>
+          <div id="dentists-list" style="max-width: 650px; border: 1px solid var(--border-color); border-radius: var(--radius-md);"></div>
+        </div>
+
+        <!-- Motifs Management -->
+        <div style="margin-top: 2rem; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
+          <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 0.75rem;">🦷 Motifs de Consultation & Durées</h3>
+          <div id="reasons-list" style="max-width: 650px; border: 1px solid var(--border-color); border-radius: var(--radius-md);"></div>
+        </div>
+
+        <!-- Database Backup & Security -->
+        <div style="margin-top: 2.5rem; border-top: 1px solid var(--border-color); padding-top: 1.5rem; max-width: 650px;">
+          <h3 style="font-size: 1.05rem; font-weight: 700; margin-bottom: 0.5rem;">💾 Sauvegarde & Sécurité des Données</h3>
+          <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
+            Toutes vos données sont stockées en local dans une base SQLite robuste et sécurisée. Vous pouvez télécharger une copie de sauvegarde à tout moment pour la garder sur clé USB ou disque externe.
+          </p>
+          <button id="btn-download-backup" class="btn-secondary" style="display:inline-flex; align-items:center; gap:0.5rem;">
+            💾 Télécharger la sauvegarde complète de la base de données (.db)
+          </button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ============================================================= -->
+  <!-- MODAL: NOUVEAU / MODIFIER RENDEZ-VOUS -->
+  <!-- ============================================================= -->
+  <div id="modal-rdv" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="modal-rdv-title">Prendre un Rendez-vous</h2>
+        <button class="modal-close-btn close-modal-trigger">&times;</button>
+      </div>
+      <form id="form-rdv">
+        <input type="hidden" id="rdv-id">
+        <div class="modal-body">
+          
+          <!-- Date and Time -->
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Date :</label>
+              <input type="date" id="rdv-date" class="form-input" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Heure de début :</label>
+              <input type="time" id="rdv-heure" class="form-input" required>
+            </div>
+          </div>
+
+          <!-- Reason and Duration -->
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Motif :</label>
+              <select id="rdv-motif" class="form-select" required></select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Durée (minutes) :</label>
+              <select id="rdv-duree" class="form-select" required>
+                <option value="15">15 min</option>
+                <option value="20">20 min</option>
+                <option value="30" selected>30 min</option>
+                <option value="45">45 min</option>
+                <option value="60">60 min (1 heure)</option>
+                <option value="90">90 min (1h30)</option>
+                <option value="120">120 min (2 heures)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Dentist -->
+          <div class="form-group">
+            <label class="form-label">Praticien / Dentiste assigné :</label>
+            <select id="rdv-dentiste" class="form-select">
+              <option value="">Tous les praticiens (Cabinet entier)</option>
+            </select>
+          </div>
+
+          <!-- Patient Identity -->
+          <div class="form-row" style="position:relative;">
+            <div class="form-group" style="position:relative;">
+              <label class="form-label">Nom du patient :</label>
+              <input type="text" id="rdv-nom" class="form-input" placeholder="ex. Benali" autocomplete="off" required>
+              <div id="patient-autocomplete-list" style="position:absolute; top:100%; left:0; right:0; background:#fff; border:1px solid #cbd5e1; border-radius:6px; max-height:160px; overflow-y:auto; z-index:50; display:none; box-shadow:0 4px 6px -1px rgba(0,0,0,0.1);"></div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Prénom :</label>
+              <input type="text" id="rdv-prenom" class="form-input" placeholder="ex. Karim">
+            </div>
+          </div>
+
+          <!-- Phone & Status -->
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Numéro de téléphone :</label>
+              <input type="tel" id="rdv-tel" class="form-input" placeholder="ex. 0555 12 34 56" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Statut du RDV :</label>
+              <select id="rdv-statut" class="form-select" required>
+                <option value="À confirmer" selected>À confirmer</option>
+                <option value="Confirmé">Confirmé</option>
+                <option value="Venu">Venu</option>
+                <option value="Absent">Absent</option>
+                <option value="Annulé">Annulé</option>
+                <option value="Reporté">Reporté</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Remarque -->
+          <div class="form-group">
+            <label class="form-label">Remarque médicale ou administrative (facultatif) :</label>
+            <textarea id="rdv-remarque" class="form-textarea" rows="2" placeholder="Allergies, devis signé, demande particulière..."></textarea>
+          </div>
+
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn-secondary close-modal-trigger">Annuler</button>
+          <button type="submit" class="btn-primary">Enregistrer le rendez-vous</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container for Real-time alerts -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Scripts -->
+  <script src="js/api.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
