@@ -1,12 +1,14 @@
 /**
  * Server Module for Dental Practice Software (Cabinet Dentaire)
  * Multi-user, Real-time WebSockets, ACID Transactions, Safe Concurrency.
+ * Automatic Cloudflare Public Tunnel for instant 24/7 remote & mobile access.
  */
 const express = require('express');
 const http = require('node:http');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
+const { spawn } = require('node:child_process');
 const { WebSocketServer, WebSocket } = require('ws');
 const {
   db,
@@ -45,6 +47,8 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+let publicCloudUrl = null;
+
 // -------------------------------------------------------------
 // REAL-TIME WEBSOCKET BROADCASTING
 // -------------------------------------------------------------
@@ -65,7 +69,7 @@ function broadcast(type, payload = {}) {
 wss.on('connection', (ws) => {
   ws.send(JSON.stringify({
     type: 'CONNECTED',
-    payload: { clientsCount: wss.clients.size }
+    payload: { clientsCount: wss.clients.size, publicUrl: publicCloudUrl }
   }));
 
   ws.on('error', (err) => {
@@ -89,6 +93,18 @@ function getSettingsMap() {
   }
   return map;
 }
+
+// -------------------------------------------------------------
+// API: PUBLIC CLOUD URL (FOR SHARING TO MOBILES / EXTERNAL PCS)
+// -------------------------------------------------------------
+app.get('/api/public-url', (req, res) => {
+  res.json({
+    success: true,
+    publicUrl: publicCloudUrl || null,
+    localIps: getLocalIPAddresses(),
+    port: PORT
+  });
+});
 
 // -------------------------------------------------------------
 // API: SETTINGS
@@ -258,18 +274,15 @@ app.get('/api/disponibilites', (req, res) => {
     const closedDay1 = (settings.closed_day_1 || '').trim();
     const closedDay2 = (settings.closed_day_2 || '').trim();
 
-    // Check if day is closed
     const dateObj = new Date(date + 'T12:00:00');
     const dayOfWeek = getDayName(dateObj.getDay());
     const isClosed = (closedDay1 && dayOfWeek.toLowerCase() === closedDay1.toLowerCase()) ||
                      (closedDay2 && dayOfWeek.toLowerCase() === closedDay2.toLowerCase());
 
-    // Generate slots
     const startMinutes = timeToMinutes(openingTime);
     const endMinutes = timeToMinutes(closingTime);
     const totalSlots = Math.floor((endMinutes - startMinutes) / slotDuration);
 
-    // Fetch existing appointments for the day
     let sql = `
       SELECT a.*, d.name as dentiste_nom, d.color as dentiste_color
       FROM appointments a
@@ -303,7 +316,6 @@ app.get('/api/disponibilites', (req, res) => {
         continue;
       }
 
-      // Check if any appointment covers this slot
       const coveringRdv = appointments.find((rdv) => {
         const rdvStart = timeToMinutes(rdv.heure_debut);
         const rdvEnd = timeToMinutes(rdv.heure_fin);
@@ -311,10 +323,8 @@ app.get('/api/disponibilites', (req, res) => {
         if (!overlap) return false;
 
         if (!dentistId) {
-          // If viewing general availability, ANY appointment occupies the slot
           return true;
         } else {
-          // If viewing specific dentist, slot is occupied if assigned to this dentist OR unassigned
           return !rdv.dentiste_id || rdv.dentiste_id === dentistId;
         }
       });
@@ -413,7 +423,7 @@ app.get('/api/appointments', (req, res) => {
   }
 });
 
-// POST: Create Appointment (ATOMIC TRANSACTION + CONFLICT ENGINE)
+// POST: Create Appointment
 app.post('/api/appointments', (req, res) => {
   try {
     const {
@@ -430,7 +440,6 @@ app.post('/api/appointments', (req, res) => {
       operator
     } = req.body;
 
-    // Strict validation
     if (!date || !heure_debut || !patient_nom || !patient_telephone || !motif) {
       return res.status(400).json({
         success: false,
@@ -443,11 +452,9 @@ app.post('/api/appointments', (req, res) => {
     const dentistIdNum = dentiste_id ? Number(dentiste_id) : null;
     const operatorName = operator || 'Secrétariat';
 
-    // Start Immediate Atomic Transaction
     db.exec('BEGIN IMMEDIATE;');
 
     try {
-      // 1. Concurrency & Overlap Check
       const conflictResult = checkAppointmentConflict(date, heure_debut, heure_fin, dentistIdNum);
       if (conflictResult.hasConflict) {
         db.exec('ROLLBACK;');
@@ -458,10 +465,8 @@ app.post('/api/appointments', (req, res) => {
         });
       }
 
-      // 2. Auto-upsert patient
       const patientId = upsertPatient(patient_nom, patient_prenom, patient_telephone);
 
-      // 3. Insert Appointment
       const insertStmt = db.prepare(`
         INSERT INTO appointments (
           date, heure_debut, heure_fin, duree,
@@ -488,7 +493,6 @@ app.post('/api/appointments', (req, res) => {
 
       const newId = resDb.lastInsertRowid;
 
-      // 4. Audit Log
       logAudit(
         operatorName,
         'CREATE_APPOINTMENT',
@@ -496,10 +500,8 @@ app.post('/api/appointments', (req, res) => {
         `Création RDV pour ${patient_nom} ${patient_prenom} le ${date} à ${heure_debut} (${durationNum}m)`
       );
 
-      // 5. Commit Transaction
       db.exec('COMMIT;');
 
-      // 6. Broadcast Real-time event
       broadcast('APPOINTMENTS_UPDATED', {
         action: 'CREATE',
         date,
@@ -521,7 +523,7 @@ app.post('/api/appointments', (req, res) => {
   }
 });
 
-// PUT: Update Appointment (ATOMIC TRANSACTION + CONFLICT ENGINE)
+// PUT: Update Appointment
 app.put('/api/appointments/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -551,7 +553,6 @@ app.put('/api/appointments/:id', (req, res) => {
     db.exec('BEGIN IMMEDIATE;');
 
     try {
-      // Check conflict if status is not cancelled or rescheduled
       if (statut !== 'Annulé' && statut !== 'Reporté') {
         const conflictResult = checkAppointmentConflict(date, heure_debut, heure_fin, dentistIdNum, id);
         if (conflictResult.hasConflict) {
@@ -564,7 +565,6 @@ app.put('/api/appointments/:id', (req, res) => {
         }
       }
 
-      // Upsert patient
       const patientId = upsertPatient(patient_nom, patient_prenom, patient_telephone);
 
       db.prepare(`
@@ -609,7 +609,7 @@ app.put('/api/appointments/:id', (req, res) => {
   }
 });
 
-// PATCH: Quick Status Change (Venu, Absent, Annulé, etc.)
+// PATCH: Status
 app.patch('/api/appointments/:id/status', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -648,7 +648,7 @@ app.patch('/api/appointments/:id/status', (req, res) => {
   }
 });
 
-// PATCH: Toggle Reminder Call
+// PATCH: Reminder
 app.patch('/api/appointments/:id/rappel', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -685,7 +685,7 @@ app.patch('/api/appointments/:id/rappel', (req, res) => {
   }
 });
 
-// DELETE: Cancel or Delete Appointment
+// DELETE: Appointment
 app.delete('/api/appointments/:id', (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -713,15 +713,12 @@ app.delete('/api/appointments/:id', (req, res) => {
   }
 });
 
-// -------------------------------------------------------------
-// API: RAPPELS (PATIENTS TO CALL)
-// -------------------------------------------------------------
+// API: RAPPELS
 app.get('/api/rappels', (req, res) => {
   try {
     const settings = getSettingsMap();
     const daysAhead = Number(settings.reminder_days_ahead) || 1;
 
-    // Target date = today + daysAhead
     let targetDate = req.query.targetDate;
     if (!targetDate) {
       const d = new Date();
@@ -738,13 +735,10 @@ app.get('/api/rappels', (req, res) => {
       ORDER BY a.heure_debut ASC
     `).all(targetDate);
 
-    // Build WhatsApp friendly URL for each appointment
     const clinicName = settings.cabinet_name || 'Cabinet Dentaire';
     const enriched = rows.map((r) => {
-      // Clean phone number (e.g., replace leading 0 with country code or clean spaces)
       let cleanPhone = (r.patient_telephone || '').replace(/[^0-9+]/g, '');
       if (cleanPhone.startsWith('0')) {
-        // Default to Algeria (+213) if typical 10 digits starting with 0, or leave clean
         cleanPhone = '213' + cleanPhone.substring(1);
       }
 
@@ -772,12 +766,10 @@ app.get('/api/rappels', (req, res) => {
   }
 });
 
-// -------------------------------------------------------------
-// API: STATS & MONTHLY OVERVIEW
-// -------------------------------------------------------------
+// API: STATS
 app.get('/api/stats/monthly', (req, res) => {
   try {
-    const yearMonth = req.query.month || new Date().toISOString().substring(0, 7); // YYYY-MM
+    const yearMonth = req.query.month || new Date().toISOString().substring(0, 7);
     const pattern = `${yearMonth}-%`;
 
     const totalPrevus = db.prepare(`
@@ -818,7 +810,6 @@ app.get('/api/stats/monthly', (req, res) => {
     const denominateur = venus + absents;
     const tauxAbsence = denominateur > 0 ? ((absents / denominateur) * 100).toFixed(1) : '0.0';
 
-    // Group counts by day for the month calendar heatmap
     const daysCounts = db.prepare(`
       SELECT date, COUNT(*) as count
       FROM appointments
@@ -851,14 +842,11 @@ app.get('/api/stats/monthly', (req, res) => {
   }
 });
 
-// -------------------------------------------------------------
-// API: CONTROLE & INTEGRITE
-// -------------------------------------------------------------
+// API: CONTROLE
 app.get('/api/controles', (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
 
-    // 1. Missing phone numbers
     const missingPhones = db.prepare(`
       SELECT id, date, heure_debut, patient_nom, patient_prenom, motif
       FROM appointments
@@ -868,7 +856,6 @@ app.get('/api/controles', (req, res) => {
       LIMIT 20
     `).all();
 
-    // 2. Overdue appointments in the past with unupdated status ('À confirmer' or 'Confirmé')
     const overdueStatus = db.prepare(`
       SELECT id, date, heure_debut, patient_nom, patient_prenom, patient_telephone, statut, motif
       FROM appointments
@@ -878,7 +865,6 @@ app.get('/api/controles', (req, res) => {
       LIMIT 30
     `).all(today);
 
-    // 3. Scan for any accidental overlaps in DB
     const allActive = db.prepare(`
       SELECT a.*, d.name as dentiste_nom
       FROM appointments a
@@ -926,9 +912,7 @@ app.get('/api/controles', (req, res) => {
   }
 });
 
-// -------------------------------------------------------------
 // API: AUDIT LOGS
-// -------------------------------------------------------------
 app.get('/api/audit-logs', (req, res) => {
   try {
     const logs = db.prepare('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 100').all();
@@ -938,12 +922,9 @@ app.get('/api/audit-logs', (req, res) => {
   }
 });
 
-// -------------------------------------------------------------
-// API: BACKUP & RESTORE & CSV EXPORT
-// -------------------------------------------------------------
+// API: BACKUP & CSV EXPORT
 app.get('/api/backup/download', (req, res) => {
   try {
-    // Flush WAL to main DB file before copying
     db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
     const filename = `backup-cabinet-${new Date().toISOString().split('T')[0]}.db`;
     res.download(DB_PATH, filename);
@@ -989,13 +970,12 @@ app.get('/api/export/csv', (req, res) => {
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="rendez-vous-${new Date().toISOString().split('T')[0]}.csv"`);
-    res.send('\uFEFF' + csv); // Include UTF-8 BOM so Excel opens it with French accents perfectly
+    res.send('\uFEFF' + csv);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Helper: Get local network IPs for convenient multi-computer setup
 function getLocalIPAddresses() {
   const interfaces = os.networkInterfaces();
   const addresses = [];
@@ -1010,6 +990,41 @@ function getLocalIPAddresses() {
 }
 
 // -------------------------------------------------------------
+// AUTOMATIC CLOUDFLARE PUBLIC TUNNEL (FREE 24/7 ONLINE ACCESS)
+// -------------------------------------------------------------
+let cfProcess = null;
+
+function startCloudTunnel(port) {
+  try {
+    cfProcess = spawn('cloudflared', ['tunnel', '--url', `http://127.0.0.1:${port}`]);
+
+    cfProcess.stderr.on('data', (data) => {
+      const text = data.toString();
+      const match = text.match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
+      if (match && !publicCloudUrl) {
+        publicCloudUrl = match[0];
+        console.log(`\n=======================================================`);
+        console.log(` 🌐 LIEN PUBLIC CLOUD GRATUIT (ACCÈS TOUT APPAREIL / 4G) :`);
+        console.log(` 👉 ${publicCloudUrl}`);
+        console.log(` (Partagez ce lien avec le dentiste et les assistantes)`);
+        console.log(`=======================================================\n`);
+        broadcast('PUBLIC_URL_READY', { url: publicCloudUrl });
+      }
+    });
+
+    cfProcess.on('error', () => {
+      // If cloudflared binary not found or blocked, silent fallback
+    });
+
+    process.on('exit', () => {
+      if (cfProcess) cfProcess.kill();
+    });
+  } catch (err) {
+    // Ignore error
+  }
+}
+
+// -------------------------------------------------------------
 // START HTTP & WEBSOCKET SERVER
 // -------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
@@ -1021,12 +1036,16 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(` Accès local sur ce PC : http://localhost:${PORT}`);
   const ips = getLocalIPAddresses();
   if (ips.length > 0) {
-    console.log(` Accès réseau (autres PC / tablettes du cabinet) :`);
+    console.log(` Accès réseau Wi-Fi local :`);
     ips.forEach((ip) => {
       console.log(`    👉 http://${ip}:${PORT}`);
     });
   }
   console.log(` Mode Base de Données : SQLite WAL (Transactions ACID activées)`);
   console.log(` Synchronisation temps réel : WebSocket activé`);
+  console.log(` Initialisation du lien Cloudflare sécurisé en cours...`);
   console.log(`=======================================================`);
+
+  // Start cloud tunnel automatically
+  startCloudTunnel(PORT);
 });

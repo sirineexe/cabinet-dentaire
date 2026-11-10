@@ -1204,6 +1204,64 @@ document.addEventListener('DOMContentLoaded', async () => {
     return h * 60 + m;
   };
 
+  // -------------------------------------------------------------
+  // MODAL SHARE CLOUD ACCESS
+  // -------------------------------------------------------------
+  const btnShareCloud = document.getElementById('btn-share-cloud');
+  const modalShare = document.getElementById('modal-share');
+  const shareCloudInput = document.getElementById('share-cloud-input');
+  const btnCopyCloudLink = document.getElementById('btn-copy-cloud-link');
+  const btnWhatsappShare = document.getElementById('btn-whatsapp-share');
+
+  async function updateShareLink() {
+    try {
+      const res = await API.get('/public-url');
+      const url = res.publicUrl || (res.localIps && res.localIps.length > 0 ? `http://${res.localIps[0]}:${res.port}` : window.location.origin);
+      if (shareCloudInput) shareCloudInput.value = url;
+
+      if (btnWhatsappShare) {
+        const text = encodeURIComponent(`Bonjour, voici le lien pour accéder au planning du Cabinet Dentaire en direct sur ton PC ou ton téléphone :\n\n${url}`);
+        btnWhatsappShare.href = `https://wa.me/?text=${text}`;
+      }
+    } catch (e) {
+      if (shareCloudInput) shareCloudInput.value = window.location.origin;
+    }
+  }
+
+  btnShareCloud?.addEventListener('click', async () => {
+    await updateShareLink();
+    modalShare.classList.add('active');
+  });
+
+  document.querySelectorAll('.close-share-modal').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      modalShare.classList.remove('active');
+    });
+  });
+
+  btnCopyCloudLink?.addEventListener('click', () => {
+    if (shareCloudInput && shareCloudInput.value) {
+      navigator.clipboard.writeText(shareCloudInput.value).then(() => {
+        API.showToast('Lien copié dans le presse-papier !', 'success');
+      }).catch(() => {
+        shareCloudInput.select();
+        document.execCommand('copy');
+        API.showToast('Lien copié !', 'success');
+      });
+    }
+  });
+
+  API.on('PUBLIC_URL_READY', (payload) => {
+    if (payload && payload.url && shareCloudInput) {
+      shareCloudInput.value = payload.url;
+      if (btnWhatsappShare) {
+        const text = encodeURIComponent(`Bonjour, voici le lien pour accéder au planning du Cabinet Dentaire en direct sur ton PC ou ton téléphone :\n\n${payload.url}`);
+        btnWhatsappShare.href = `https://wa.me/?text=${text}`;
+      }
+    }
+  });
+
   // Initial render of first tab
   refreshActiveView();
+  updateShareLink();
 });
