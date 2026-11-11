@@ -260,12 +260,12 @@ app.get('/api/patients', (req, res) => {
 });
 
 // -------------------------------------------------------------
-// API: DISPONIBILITÉS (CALCULATOR ENGINE)
+// API: DISPONIBILITÉS (DUAL-CHAIR ENGINE: DR. OMAR & DR. NESRINE)
 // -------------------------------------------------------------
 app.get('/api/disponibilites', (req, res) => {
   try {
     const date = req.query.date || new Date().toISOString().split('T')[0];
-    const dentistId = req.query.dentistId ? Number(req.query.dentistId) : null;
+    const dentistIdFilter = req.query.dentistId ? Number(req.query.dentistId) : null;
 
     const settings = getSettingsMap();
     const openingTime = settings.opening_time || '08:00';
@@ -283,10 +283,16 @@ app.get('/api/disponibilites', (req, res) => {
     const endMinutes = timeToMinutes(closingTime);
     const totalSlots = Math.floor((endMinutes - startMinutes) / slotDuration);
 
+    // Fetch active dentists
+    let dentists = db.prepare('SELECT * FROM dentists WHERE active = 1 ORDER BY id ASC').all();
+    if (dentistIdFilter) {
+      dentists = dentists.filter(d => d.id === dentistIdFilter);
+    }
+
     let sql = `
       SELECT a.*, d.name as dentiste_nom, d.color as dentiste_color
       FROM appointments a
-      LEFT JOIN dentists d ON a.dentiste_id = d.id
+      JOIN dentists d ON a.dentiste_id = d.id
       WHERE a.date = ?
         AND a.statut NOT IN ('Annulé', 'Reporté')
       ORDER BY a.heure_debut ASC
@@ -294,9 +300,12 @@ app.get('/api/disponibilites', (req, res) => {
     const appointments = db.prepare(sql).all(date);
 
     const slots = [];
-    let freeCount = 0;
-    let occupiedCount = 0;
-    let firstFreeSlot = null;
+    let totalFree = 0;
+    let totalOccupied = 0;
+    const doctorStats = {};
+    dentists.forEach(d => {
+      doctorStats[d.id] = { id: d.id, name: d.name, color: d.color, freeCount: 0, occupiedCount: 0, firstFree: null };
+    });
 
     for (let i = 0; i < totalSlots; i++) {
       const slotStartMin = startMinutes + i * slotDuration;
@@ -306,58 +315,69 @@ app.get('/api/disponibilites', (req, res) => {
       const slotStartMins = String(slotStartMin % 60).padStart(2, '0');
       const timeStr = `${slotStartHours}:${slotStartMins}`;
 
-      if (isClosed) {
-        slots.push({
-          slotNumber: i + 1,
-          time: timeStr,
-          status: 'Fermé',
-          appointment: null
+      const slotChairs = [];
+
+      for (const doctor of dentists) {
+        if (isClosed) {
+          slotChairs.push({
+            dentistId: doctor.id,
+            dentistName: doctor.name,
+            dentistColor: doctor.color,
+            status: 'Fermé',
+            appointment: null
+          });
+          continue;
+        }
+
+        // Check if this doctor has an appointment during this time slot
+        const coveringRdv = appointments.find((rdv) => {
+          if (Number(rdv.dentiste_id) !== Number(doctor.id)) return false;
+          const rdvStart = timeToMinutes(rdv.heure_debut);
+          const rdvEnd = timeToMinutes(rdv.heure_fin);
+          return slotStartMin < rdvEnd && slotEndMin > rdvStart;
         });
-        continue;
-      }
 
-      const coveringRdv = appointments.find((rdv) => {
-        const rdvStart = timeToMinutes(rdv.heure_debut);
-        const rdvEnd = timeToMinutes(rdv.heure_fin);
-        const overlap = slotStartMin < rdvEnd && slotEndMin > rdvStart;
-        if (!overlap) return false;
-
-        if (!dentistId) {
-          return true;
+        if (coveringRdv) {
+          doctorStats[doctor.id].occupiedCount++;
+          totalOccupied++;
+          slotChairs.push({
+            dentistId: doctor.id,
+            dentistName: doctor.name,
+            dentistColor: doctor.color,
+            status: 'Occupé',
+            appointment: {
+              id: coveringRdv.id,
+              patient: `${coveringRdv.patient_nom} ${coveringRdv.patient_prenom}`,
+              telephone: coveringRdv.patient_telephone,
+              motif: coveringRdv.motif,
+              statut: coveringRdv.statut,
+              dentiste: doctor.name,
+              dentisteColor: doctor.color,
+              isStartingSlot: coveringRdv.heure_debut === timeStr
+            }
+          });
         } else {
-          return !rdv.dentiste_id || rdv.dentiste_id === dentistId;
-        }
-      });
-
-      if (coveringRdv) {
-        occupiedCount++;
-        slots.push({
-          slotNumber: i + 1,
-          time: timeStr,
-          status: 'Occupé',
-          appointment: {
-            id: coveringRdv.id,
-            patient: `${coveringRdv.patient_nom} ${coveringRdv.patient_prenom}`,
-            telephone: coveringRdv.patient_telephone,
-            motif: coveringRdv.motif,
-            statut: coveringRdv.statut,
-            dentiste: coveringRdv.dentiste_nom || 'Non assigné',
-            dentisteColor: coveringRdv.dentiste_color || '#2563eb',
-            isStartingSlot: coveringRdv.heure_debut === timeStr
+          doctorStats[doctor.id].freeCount++;
+          totalFree++;
+          if (!doctorStats[doctor.id].firstFree) {
+            doctorStats[doctor.id].firstFree = timeStr;
           }
-        });
-      } else {
-        freeCount++;
-        if (!firstFreeSlot) {
-          firstFreeSlot = timeStr;
+          slotChairs.push({
+            dentistId: doctor.id,
+            dentistName: doctor.name,
+            dentistColor: doctor.color,
+            status: 'Libre',
+            appointment: null
+          });
         }
-        slots.push({
-          slotNumber: i + 1,
-          time: timeStr,
-          status: 'Libre',
-          appointment: null
-        });
       }
+
+      slots.push({
+        slotNumber: i + 1,
+        time: timeStr,
+        isClosed,
+        chairs: slotChairs
+      });
     }
 
     res.json({
@@ -366,9 +386,12 @@ app.get('/api/disponibilites', (req, res) => {
       dayOfWeek,
       isClosed,
       totalSlots,
-      freeCount,
-      occupiedCount,
-      firstFreeSlot: firstFreeSlot || 'Aucun créneau libre',
+      totalChairs: dentists.length,
+      totalSpots: totalSlots * dentists.length,
+      totalFree,
+      totalOccupied,
+      doctorStats,
+      dentists,
       slots
     });
   } catch (err) {
@@ -440,10 +463,10 @@ app.post('/api/appointments', (req, res) => {
       operator
     } = req.body;
 
-    if (!date || !heure_debut || !patient_nom || !patient_telephone || !motif) {
+    if (!date || !heure_debut || !patient_nom || !patient_telephone || !motif || !dentiste_id) {
       return res.status(400).json({
         success: false,
-        error: 'Champs requis manquants (date, heure, nom, téléphone, motif).'
+        error: 'Champs requis manquants (date, heure, nom, téléphone, motif, praticien Dr. Omar ou Dr. Nesrine).'
       });
     }
 
@@ -541,8 +564,8 @@ app.put('/api/appointments/:id', (req, res) => {
       operator
     } = req.body;
 
-    if (!date || !heure_debut || !patient_nom || !patient_telephone || !motif) {
-      return res.status(400).json({ success: false, error: 'Champs requis manquants.' });
+    if (!date || !heure_debut || !patient_nom || !patient_telephone || !motif || !dentiste_id) {
+      return res.status(400).json({ success: false, error: 'Champs requis manquants (le choix du praticien est obligatoire).' });
     }
 
     const durationNum = Number(duree) || 30;
@@ -887,8 +910,8 @@ app.get('/api/controles', (req, res) => {
         const e2 = timeToMinutes(a2.heure_fin);
 
         if (s1 < e2 && e1 > s2) {
-          const dentistConflict = !a1.dentiste_id || !a2.dentiste_id || a1.dentiste_id === a2.dentiste_id;
-          if (dentistConflict) {
+          // In a dual-chair clinic, conflict occurs ONLY if the SAME dentist is double-booked
+          if (a1.dentiste_id === a2.dentiste_id) {
             detectedConflicts.push({ a1, a2 });
           }
         }
@@ -996,7 +1019,11 @@ let cfProcess = null;
 
 function startCloudTunnel(port) {
   try {
-    cfProcess = spawn('cloudflared', ['tunnel', '--url', `http://127.0.0.1:${port}`]);
+    const cfBinary = fs.existsSync('C:\\Program Files (x86)\\cloudflared\\cloudflared.exe')
+      ? 'C:\\Program Files (x86)\\cloudflared\\cloudflared.exe'
+      : 'cloudflared';
+
+    cfProcess = spawn(cfBinary, ['tunnel', '--url', `http://127.0.0.1:${port}`]);
 
     cfProcess.stderr.on('data', (data) => {
       const text = data.toString();

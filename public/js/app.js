@@ -136,7 +136,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // -------------------------------------------------------------
-  // VUE 1: DISPONIBILITÉS (SLOT MATRIX)
+  // VUE 1: DISPONIBILITÉS (DUAL-CHAIR: DR. OMAR & DR. NESRINE)
   // -------------------------------------------------------------
   const dispDentistFilter = document.getElementById('disp-dentist-filter');
   dispDentistFilter?.addEventListener('change', () => renderDisponibilites());
@@ -145,23 +145,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     const container = document.getElementById('slots-grid');
     if (!container) return;
 
-    // Populate dentist filter dropdown if empty
     populateDentistSelect(dispDentistFilter, true);
 
     const date = API.state.currentDate;
-    const dentistId = dispDentistFilter?.value || '';
+    const dentistIdFilter = dispDentistFilter?.value || '';
 
     container.innerHTML = '<div style="grid-column:1/-1; text-align:center; padding:2rem;">Chargement des disponibilités...</div>';
 
     try {
-      const res = await API.get('/disponibilites', { date, dentistId });
+      const res = await API.get('/disponibilites', { date, dentistId: dentistIdFilter });
       if (!res.success) throw new Error(res.error);
 
-      // Update KPI
       document.getElementById('disp-date-display').textContent = formatFrenchDate(date);
-      document.getElementById('kpi-free-slots').textContent = res.isClosed ? 'Fermé' : res.freeCount;
-      document.getElementById('kpi-occupied-slots').textContent = res.isClosed ? '0' : res.occupiedCount;
-      document.getElementById('kpi-first-free').textContent = res.isClosed ? 'Cabinet fermé' : res.firstFreeSlot;
+
+      // KPIs - total across both chairs
+      document.getElementById('kpi-free-slots').textContent = res.isClosed ? 'Fermé' : res.totalFree;
+      document.getElementById('kpi-occupied-slots').textContent = res.isClosed ? '0' : res.totalOccupied;
+
+      // First free slot across all dentists
+      let firstFree = 'Aucun créneau libre';
+      if (!res.isClosed && res.doctorStats) {
+        const frees = Object.values(res.doctorStats)
+          .map(d => d.firstFree)
+          .filter(Boolean);
+        firstFree = frees.length > 0 ? frees.sort()[0] : 'Aucun créneau libre';
+      }
+      document.getElementById('kpi-first-free').textContent = res.isClosed ? 'Cabinet fermé' : firstFree;
 
       if (res.isClosed) {
         container.innerHTML = `
@@ -175,47 +184,91 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       container.innerHTML = '';
-      res.slots.forEach((slot) => {
-        const tile = document.createElement('div');
-        const isFree = slot.status === 'Libre';
-        tile.className = `slot-tile ${isFree ? 'slot-free' : 'slot-occupied'}`;
 
-        let detailsHtml = '';
-        if (isFree) {
-          detailsHtml = `<div class="slot-status-label">Libre</div><div style="font-size:0.7rem; color:#15803d;">+ Cliquer pour réserver</div>`;
-        } else {
-          detailsHtml = `
-            <div class="slot-patient-info" title="${slot.appointment.patient} (${slot.appointment.motif})">
-              ${slot.appointment.patient}
-            </div>
-            <div style="font-size: 0.7rem; color: #991b1b;">
-              ${slot.appointment.motif}
+      res.slots.forEach((slot) => {
+        // One row per time slot, split into N chairs (one per dentist)
+        const rowDiv = document.createElement('div');
+        rowDiv.style.cssText = 'display: contents;';
+
+        slot.chairs.forEach((chair) => {
+          const tile = document.createElement('div');
+          const isFree = chair.status === 'Libre';
+          const isOccupied = chair.status === 'Occupé';
+
+          tile.className = `slot-tile ${isFree ? 'slot-free' : isOccupied ? 'slot-occupied' : 'slot-closed'}`;
+
+          // Apply dentist color to occupied tiles
+          if (isOccupied) {
+            tile.style.borderColor = chair.dentistColor;
+            tile.style.borderLeftWidth = '4px';
+            tile.style.borderLeftStyle = 'solid';
+            tile.style.background = chair.dentistColor + '12';
+            tile.style.color = '#1e293b';
+          }
+
+          let headerHtml = `
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:3px;">
+              <span style="font-size:0.95rem; font-weight:700; font-family:monospace;">${slot.time}</span>
+              <span style="font-size:0.65rem; font-weight:700; padding:1px 5px; border-radius:4px; background:${chair.dentistColor}22; color:${chair.dentistColor};">${chair.dentistName.replace('Dr. ', '')}</span>
             </div>
           `;
-        }
 
-        tile.innerHTML = `
-          <div class="slot-time">${slot.time}</div>
-          ${detailsHtml}
-        `;
-
-        tile.addEventListener('click', () => {
+          let detailsHtml = '';
           if (isFree) {
-            openNewRdvModal({
-              date: API.state.currentDate,
-              heure: slot.time,
-              dentiste_id: dentistId
-            });
-          } else if (slot.appointment) {
-            openEditRdvModal(slot.appointment.id);
+            detailsHtml = `
+              <div style="font-size:0.75rem; font-weight:600; color:#166534;">Libre ✓</div>
+              <div style="font-size:0.65rem; color:#15803d; margin-top:2px;">+ Cliquer pour réserver</div>
+            `;
+          } else if (isOccupied) {
+            detailsHtml = `
+              <div style="font-size:0.75rem; font-weight:700; color:#1e293b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${chair.appointment.patient}">
+                ${chair.appointment.patient}
+              </div>
+              <div style="font-size:0.65rem; color:#475569;">${chair.appointment.motif}</div>
+              <div style="font-size:0.65rem; margin-top:2px;">
+                <span style="background:${getStatusBg(chair.appointment.statut)}; color:${getStatusColor(chair.appointment.statut)}; padding:1px 5px; border-radius:4px; font-weight:600;">
+                  ${chair.appointment.statut}
+                </span>
+              </div>
+            `;
           }
-        });
 
-        container.appendChild(tile);
+          tile.innerHTML = headerHtml + detailsHtml;
+
+          tile.addEventListener('click', () => {
+            if (isFree) {
+              openNewRdvModal({
+                date: API.state.currentDate,
+                heure: slot.time,
+                dentiste_id: chair.dentistId
+              });
+            } else if (isOccupied && chair.appointment) {
+              openEditRdvModal(chair.appointment.id);
+            }
+          });
+
+          container.appendChild(tile);
+        });
       });
     } catch (err) {
       container.innerHTML = `<div style="grid-column:1/-1; color:var(--danger); padding:1rem;">Erreur : ${err.message}</div>`;
     }
+  }
+
+  function getStatusBg(statut) {
+    const map = {
+      'À confirmer': '#fef3c7', 'Confirmé': '#e0e7ff', 'Venu': '#d1fae5',
+      'Absent': '#fee2e2', 'Annulé': '#f1f5f9', 'Reporté': '#fef3c7'
+    };
+    return map[statut] || '#f1f5f9';
+  }
+
+  function getStatusColor(statut) {
+    const map = {
+      'À confirmer': '#b45309', 'Confirmé': '#4f46e5', 'Venu': '#059669',
+      'Absent': '#dc2626', 'Annulé': '#64748b', 'Reporté': '#b45309'
+    };
+    return map[statut] || '#64748b';
   }
 
   // -------------------------------------------------------------
@@ -259,7 +312,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Update counters
       const activeRdvs = appointments.filter((a) => a.statut !== 'Annulé' && a.statut !== 'Reporté');
       document.getElementById('day-rdv-count').textContent = activeRdvs.length;
-      document.getElementById('day-free-count').textContent = resDisp.freeCount;
+      document.getElementById('day-free-count').textContent = resDisp.totalFree ?? resDisp.freeCount ?? 0;
 
       if (resDisp.isClosed) {
         tableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; padding:3rem; color:#64748b;">Cabinet fermé le ${resDisp.dayOfWeek}</td></tr>`;
@@ -269,89 +322,101 @@ document.addEventListener('DOMContentLoaded', async () => {
       tableBody.innerHTML = '';
 
       resDisp.slots.forEach((slot) => {
-        const row = document.createElement('tr');
-
-        // Check if an appointment starts at this time
-        const startingRdv = appointments.find((a) => a.heure_debut === slot.time && a.statut !== 'Annulé');
-        // Check if an appointment covers this time but started earlier (continuation / suite)
-        const coveringRdv = appointments.find((a) => {
+        // With dual-chair system: same time slot can have 2 patients (one per doctor)
+        // Find ALL appointments at this time (not just one)
+        const startingRdvs = appointments.filter((a) => a.heure_debut === slot.time && a.statut !== 'Annulé');
+        const coveringRdvs = appointments.filter((a) => {
           if (a.statut === 'Annulé') return false;
-          const s = a.heure_debut;
-          const e = a.heure_fin;
-          return slot.time > s && slot.time < e;
+          return slot.time > a.heure_debut && slot.time < a.heure_fin;
         });
 
-        let patientHtml = '<span style="color:#94a3b8;">Créneau libre</span>';
-        let phoneHtml = '-';
-        let motifHtml = '-';
-        let dentistHtml = '-';
-        let statusHtml = '<span class="status-pill status-venu" style="background:#f0fdf4; color:#166534; border:1px solid #bbf7d0;">Libre</span>';
-        let actionsHtml = `<button class="action-btn-mini btn-book-slot" data-time="${slot.time}">+ Réserver</button>`;
+        // If there are appointments at this slot (starting or covering), render one row per appointment
+        const hasStarting = startingRdvs.length > 0;
+        const hasCovering = coveringRdvs.length > 0;
 
-        if (startingRdv) {
-          const cleanPhone = (startingRdv.patient_telephone || '').replace(/[^0-9]/g, '');
-          patientHtml = `
-            <div class="patient-identity">
-              <span class="name">${startingRdv.patient_nom} ${startingRdv.patient_prenom}</span>
-              ${startingRdv.remarque ? `<span style="font-size:0.75rem; color:#d97706;">📝 ${startingRdv.remarque}</span>` : ''}
-            </div>
-          `;
-          phoneHtml = `
-            <div class="patient-identity">
-              <span class="phone"><a href="tel:${startingRdv.patient_telephone}" style="color:inherit; text-decoration:none;">📞 ${startingRdv.patient_telephone}</a></span>
-            </div>
-          `;
-          motifHtml = `<span class="badge-motif">${startingRdv.motif} (${startingRdv.duree} min)</span>`;
-          dentistHtml = `
-            <span class="badge-dentiste">
-              <span class="dentiste-dot" style="background:${startingRdv.dentiste_color || '#2563eb'}"></span>
-              ${startingRdv.dentiste_nom || 'Tous'}
-            </span>
-          `;
+        if (!hasStarting && !hasCovering) {
+          // Free slot row
+          const row = document.createElement('tr');
+          const clinicSlot = slot.chairs || [];
+          const freeChairs = clinicSlot.filter(c => c.status === 'Libre');
+          const freeDoctorNames = freeChairs.map(c => c.dentistName.replace('Dr. ', '')).join(' & ');
 
-          const statusClass = getStatusClass(startingRdv.statut);
-          statusHtml = `<span class="status-pill ${statusClass}">${startingRdv.statut}</span>`;
-
-          // Quick status dropdown + WhatsApp + Call + Edit
-          const clinicName = API.state.settings.cabinet_name || 'Cabinet Dentaire';
-          const msg = encodeURIComponent(`Bonjour ${startingRdv.patient_prenom ? startingRdv.patient_prenom + ' ' : ''}${startingRdv.patient_nom},\n\nLe ${clinicName} vous confirme votre rendez-vous le ${startingRdv.date} à ${startingRdv.heure_debut}.\nCordialement.`);
-          const waPhone = cleanPhone.startsWith('0') ? '213' + cleanPhone.substring(1) : cleanPhone;
-
-          actionsHtml = `
-            <div class="actions-group">
-              <select class="form-select status-quick-changer action-btn-mini" data-id="${startingRdv.id}">
-                <option value="À confirmer" ${startingRdv.statut === 'À confirmer' ? 'selected' : ''}>À confirmer</option>
-                <option value="Confirmé" ${startingRdv.statut === 'Confirmé' ? 'selected' : ''}>Confirmé</option>
-                <option value="Venu" ${startingRdv.statut === 'Venu' ? 'selected' : ''}>Venu</option>
-                <option value="Absent" ${startingRdv.statut === 'Absent' ? 'selected' : ''}>Absent</option>
-                <option value="Annulé" ${startingRdv.statut === 'Annulé' ? 'selected' : ''}>Annulé</option>
-                <option value="Reporté" ${startingRdv.statut === 'Reporté' ? 'selected' : ''}>Reporté</option>
-              </select>
-              <a href="https://wa.me/${waPhone}?text=${msg}" target="_blank" class="action-btn-mini btn-whatsapp" title="Envoyer rappel WhatsApp">📱</a>
-              <button class="action-btn-mini btn-edit-rdv" data-id="${startingRdv.id}" title="Modifier">✏️</button>
-            </div>
+          row.innerHTML = `
+            <td><span class="slot-hour-badge">${slot.time}</span></td>
+            <td><span style="color:#94a3b8;">Créneau libre</span></td>
+            <td>-</td>
+            <td>-</td>
+            <td><span style="color:#94a3b8; font-size:0.8rem;">${freeDoctorNames || 'Libre'}</span></td>
+            <td><span class="status-pill status-venu" style="background:#f0fdf4; color:#166534; border:1px solid #bbf7d0;">Libre</span></td>
+            <td><button class="action-btn-mini btn-book-slot" data-time="${slot.time}">+ Réserver</button></td>
           `;
-        } else if (coveringRdv) {
-          // Multi-slot appointment continuation
-          patientHtml = `<div class="rdv-card-inline continuation">↳ (suite) ${coveringRdv.patient_nom} ${coveringRdv.patient_prenom}</div>`;
-          phoneHtml = `<span style="color:#94a3b8;">${coveringRdv.patient_telephone}</span>`;
-          motifHtml = `<span style="color:#94a3b8; font-size:0.8rem;">${coveringRdv.motif}</span>`;
-          dentistHtml = `<span style="color:#94a3b8; font-size:0.8rem;">${coveringRdv.dentiste_nom || ''}</span>`;
-          statusHtml = `<span style="color:#94a3b8; font-size:0.8rem;">En cours</span>`;
-          actionsHtml = `<span style="color:#94a3b8; font-size:0.75rem;">Jusqu'à ${coveringRdv.heure_fin}</span>`;
+          tableBody.appendChild(row);
+        } else {
+          // Show one row per starting appointment
+          startingRdvs.forEach((startingRdv) => {
+            const row = document.createElement('tr');
+            const cleanPhone = (startingRdv.patient_telephone || '').replace(/[^0-9]/g, '');
+            const clinicName = API.state.settings.cabinet_name || 'Cabinet Dentaire';
+            const msg = encodeURIComponent(`Bonjour ${startingRdv.patient_prenom ? startingRdv.patient_prenom + ' ' : ''}${startingRdv.patient_nom},\n\nLe ${clinicName} vous confirme votre rendez-vous le ${startingRdv.date} à ${startingRdv.heure_debut}.\nCordialement.`);
+            const waPhone = cleanPhone.startsWith('0') ? '213' + cleanPhone.substring(1) : cleanPhone;
+            const statusClass = getStatusClass(startingRdv.statut);
+
+            row.innerHTML = `
+              <td><span class="slot-hour-badge">${slot.time}</span></td>
+              <td>
+                <div class="patient-identity">
+                  <span class="name">${startingRdv.patient_nom} ${startingRdv.patient_prenom}</span>
+                  ${startingRdv.remarque ? `<span style="font-size:0.75rem; color:#d97706;">📝 ${startingRdv.remarque}</span>` : ''}
+                </div>
+              </td>
+              <td>
+                <div class="patient-identity">
+                  <span class="phone"><a href="tel:${startingRdv.patient_telephone}" style="color:inherit; text-decoration:none;">📞 ${startingRdv.patient_telephone}</a></span>
+                </div>
+              </td>
+              <td><span class="badge-motif">${startingRdv.motif} (${startingRdv.duree} min)</span></td>
+              <td>
+                <span class="badge-dentiste">
+                  <span class="dentiste-dot" style="background:${startingRdv.dentiste_color || '#2563eb'}"></span>
+                  ${startingRdv.dentiste_nom || 'Tous'}
+                </span>
+              </td>
+              <td><span class="status-pill ${statusClass}">${startingRdv.statut}</span></td>
+              <td>
+                <div class="actions-group">
+                  <select class="form-select status-quick-changer action-btn-mini" data-id="${startingRdv.id}">
+                    <option value="À confirmer" ${startingRdv.statut === 'À confirmer' ? 'selected' : ''}>À confirmer</option>
+                    <option value="Confirmé" ${startingRdv.statut === 'Confirmé' ? 'selected' : ''}>Confirmé</option>
+                    <option value="Venu" ${startingRdv.statut === 'Venu' ? 'selected' : ''}>Venu</option>
+                    <option value="Absent" ${startingRdv.statut === 'Absent' ? 'selected' : ''}>Absent</option>
+                    <option value="Annulé" ${startingRdv.statut === 'Annulé' ? 'selected' : ''}>Annulé</option>
+                    <option value="Reporté" ${startingRdv.statut === 'Reporté' ? 'selected' : ''}>Reporté</option>
+                  </select>
+                  <a href="https://wa.me/${waPhone}?text=${msg}" target="_blank" class="action-btn-mini btn-whatsapp" title="Envoyer rappel WhatsApp">📱</a>
+                  <button class="action-btn-mini btn-edit-rdv" data-id="${startingRdv.id}" title="Modifier">✏️</button>
+                </div>
+              </td>
+            `;
+            tableBody.appendChild(row);
+          });
+
+          // Show continuation rows for multi-slot appointments (but only if no starting rdv at this slot)
+          if (!hasStarting) {
+            coveringRdvs.forEach((coveringRdv) => {
+              const row = document.createElement('tr');
+              row.innerHTML = `
+                <td><span class="slot-hour-badge">${slot.time}</span></td>
+                <td><div class="rdv-card-inline continuation">↳ (suite) ${coveringRdv.patient_nom} ${coveringRdv.patient_prenom}</div></td>
+                <td><span style="color:#94a3b8;">${coveringRdv.patient_telephone}</span></td>
+                <td><span style="color:#94a3b8; font-size:0.8rem;">${coveringRdv.motif}</span></td>
+                <td><span style="color:#94a3b8; font-size:0.8rem;">${coveringRdv.dentiste_nom || ''}</span></td>
+                <td><span style="color:#94a3b8; font-size:0.8rem;">En cours</span></td>
+                <td><span style="color:#94a3b8; font-size:0.75rem;">Jusqu'à ${coveringRdv.heure_fin}</span></td>
+              `;
+              tableBody.appendChild(row);
+            });
+          }
         }
-
-        row.innerHTML = `
-          <td><span class="slot-hour-badge">${slot.time}</span></td>
-          <td>${patientHtml}</td>
-          <td>${phoneHtml}</td>
-          <td>${motifHtml}</td>
-          <td>${dentistHtml}</td>
-          <td>${statusHtml}</td>
-          <td>${actionsHtml}</td>
-        `;
-
-        tableBody.appendChild(row);
       });
 
       // Bind dynamic actions
@@ -1010,7 +1075,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     inputRdvId.value = '';
     modalTitle.textContent = 'Nouveau Rendez-vous';
 
-    populateDentistSelect(selectDentiste, true);
+    populateDentistSelect(selectDentiste, false);
     populateMotifSelect(selectMotif);
 
     inputDate.value = prefill.date || API.state.currentDate;
@@ -1029,7 +1094,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const rdv = res.appointments.find((a) => a.id === Number(appointmentId));
       if (!rdv) throw new Error('Rendez-vous introuvable');
 
-      populateDentistSelect(selectDentiste, true);
+      populateDentistSelect(selectDentiste, false);
       populateMotifSelect(selectMotif);
 
       modalTitle.textContent = `Modifier Rendez-vous #${rdv.id}`;
@@ -1130,6 +1195,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     submitBtn.disabled = true;
     submitBtn.textContent = 'Vérification & Enregistrement...';
 
+    // Validate dentist is selected
+    if (!payload.dentiste_id) {
+      alert('⚠️ Veuillez choisir un praticien : Dr. Omar ou Dr. Nesrine');
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Enregistrer le rendez-vous';
+      return;
+    }
+
     try {
       if (id) {
         await API.put(`/appointments/${id}`, payload);
@@ -1155,7 +1228,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   function populateDentistSelect(selectElement, includeAll = false) {
     if (!selectElement) return;
     const currentVal = selectElement.value;
-    selectElement.innerHTML = includeAll ? '<option value="">Tous les praticiens</option>' : '';
+    if (includeAll) {
+      selectElement.innerHTML = '<option value="">Tous les praticiens</option>';
+    } else {
+      selectElement.innerHTML = '<option value="">— Choisir Dr. Omar ou Dr. Nesrine —</option>';
+    }
     API.state.dentists.forEach((d) => {
       const opt = document.createElement('option');
       opt.value = d.id;

@@ -1,5 +1,9 @@
 node_modules/
+data/cabinet.db
 data/cabinet.db-wal
 data/cabinet.db-shm
+data/backups/
 .DS_Store
 *.log
+test_output.txt
+test_error.txt

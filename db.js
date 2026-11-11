@@ -1,12 +1,12 @@
 /**
  * Database Module for Dental Practice Software (Cabinet Dentaire)
+ * Dual-Practitioner System: Dr. Omar & Dr. Nesrine
  * Uses native node:sqlite DatabaseSync with WAL mode and ACID transactions.
  */
 const { DatabaseSync } = require('node:sqlite');
 const path = require('node:path');
 const fs = require('node:fs');
 
-// Ensure data directory and backup directory exist
 const DATA_DIR = path.join(__dirname, 'data');
 const BACKUP_DIR = path.join(DATA_DIR, 'backups');
 
@@ -36,10 +36,10 @@ function initSchema() {
       value TEXT NOT NULL
     );
 
-    -- Dentists table
+    -- Dentists table (Dr. Omar & Dr. Nesrine)
     CREATE TABLE IF NOT EXISTS dentists (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
+      name TEXT NOT NULL UNIQUE,
       speciality TEXT DEFAULT 'Chirurgien-dentiste',
       color TEXT NOT NULL DEFAULT '#2563eb',
       active INTEGER NOT NULL DEFAULT 1,
@@ -68,6 +68,7 @@ function initSchema() {
     );
 
     -- Appointments table (Rendez-vous)
+    -- Must have a dentiste_id: Dr. Omar or Dr. Nesrine
     CREATE TABLE IF NOT EXISTS appointments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       date TEXT NOT NULL,            -- YYYY-MM-DD
@@ -79,7 +80,7 @@ function initSchema() {
       patient_telephone TEXT NOT NULL,
       patient_id INTEGER REFERENCES patients(id) ON DELETE SET NULL,
       motif TEXT NOT NULL,
-      dentiste_id INTEGER REFERENCES dentists(id) ON DELETE SET NULL,
+      dentiste_id INTEGER NOT NULL REFERENCES dentists(id) ON DELETE RESTRICT,
       statut TEXT NOT NULL DEFAULT 'À confirmer', -- À confirmer, Confirmé, Venu, Absent, Annulé, Reporté
       rappel_effectue INTEGER NOT NULL DEFAULT 0, -- 0 = non, 1 = oui
       rappel_date DATETIME,
@@ -118,7 +119,7 @@ function initSchema() {
 
   // Seed default settings if empty
   const defaultSettings = [
-    ['cabinet_name', 'Cabinet Dentaire'],
+    ['cabinet_name', 'Cabinet Dentaire Dr. Omar & Dr. Nesrine'],
     ['cabinet_phone', '0555 12 34 56'],
     ['opening_time', '08:00'],
     ['closing_time', '17:00'],
@@ -138,13 +139,14 @@ function initSchema() {
     }
   }
 
-  // Seed default dentists if empty
-  const countDentists = db.prepare('SELECT COUNT(*) as c FROM dentists').get();
-  if (countDentists.c === 0) {
-    const insertDentist = db.prepare('INSERT INTO dentists (name, speciality, color, active) VALUES (?, ?, ?, 1)');
-    insertDentist.run('Dr. Benali', 'Chirurgien-dentiste', '#2563eb');
-    insertDentist.run('Dr. Khelil', 'Orthodontiste', '#059669');
-  }
+  // Ensure cabinet name reflects Dr. Omar & Dr. Nesrine
+  db.prepare('UPDATE settings SET value = ? WHERE key = ?').run(
+    'Cabinet Dentaire Dr. Omar & Dr. Nesrine',
+    'cabinet_name'
+  );
+
+  // Setup Dentists: Dr. Omar & Dr. Nesrine
+  setupDoctorsAndReset();
 
   // Seed default reasons from the sheet if empty
   const countReasons = db.prepare('SELECT COUNT(*) as c FROM reasons').get();
@@ -169,8 +171,49 @@ function initSchema() {
     }
   }
 
-  // Create automatic daily backup on startup
   createAutoBackup();
+}
+
+/**
+ * Reset database to fresh state with Dr. Omar and Dr. Nesrine
+ */
+function setupDoctorsAndReset() {
+  // Check if we need to reset dentists
+  const dentists = db.prepare('SELECT id, name FROM dentists').all();
+  const hasOldDentists = dentists.some(d => d.name.includes('Benali') || d.name.includes('Khelil'));
+  const hasOmar = dentists.some(d => d.name === 'Dr. Omar');
+  const hasNesrine = dentists.some(d => d.name === 'Dr. Nesrine');
+
+  if (hasOldDentists || !hasOmar || !hasNesrine) {
+    console.log('[RESET] Réinitialisation à zéro avec Dr. Omar et Dr. Nesrine...');
+    // Wipe old appointments, patients and logs
+    db.exec(`
+      DELETE FROM appointments;
+      DELETE FROM patients;
+      DELETE FROM audit_logs;
+      DELETE FROM users;
+      DELETE FROM dentists;
+    `);
+
+    // Insert Dr. Omar & Dr. Nesrine
+    const insertDentist = db.prepare('INSERT INTO dentists (name, speciality, color, active) VALUES (?, ?, ?, 1)');
+    const resOmar = insertDentist.run('Dr. Omar', 'Chirurgien-dentiste', '#2563eb');     // Royal Blue
+    const resNesrine = insertDentist.run('Dr. Nesrine', 'Chirurgien-dentiste', '#db2777'); // Rose/Magenta
+
+    // Insert Users
+    const insertUser = db.prepare('INSERT INTO users (name, role, pin, dentiste_id) VALUES (?, ?, ?, ?)');
+    insertUser.run('Secrétariat', 'secretaire', '1234', null);
+    insertUser.run('Dr. Omar', 'dentiste', '0000', resOmar.lastInsertRowid);
+    insertUser.run('Dr. Nesrine', 'dentiste', '0000', resNesrine.lastInsertRowid);
+    insertUser.run('Administrateur', 'admin', '9999', null);
+
+    console.log('[RESET] Praticiens initialisés : Dr. Omar (#2563eb) et Dr. Nesrine (#db2777)');
+  }
+}
+
+function resetAllAppointments() {
+  db.exec('DELETE FROM appointments; DELETE FROM patients; DELETE FROM audit_logs;');
+  console.log('[RESET] Tous les rendez-vous ont été effacés. Repart à zéro.');
 }
 
 // Automatic daily backup creation
@@ -181,7 +224,6 @@ function createAutoBackup() {
     const dateStr = now.toISOString().split('T')[0];
     const backupFile = path.join(BACKUP_DIR, `sauvegarde_${dateStr}.db`);
 
-    // Only backup once per day automatically or if not exists
     if (!fs.existsSync(backupFile)) {
       fs.copyFileSync(DB_PATH, backupFile);
       console.log(`[Sauvegarde Automatique] Base copiée avec succès dans : ${backupFile}`);
@@ -216,19 +258,29 @@ function timeToMinutes(timeStr) {
   return h * 60 + m;
 }
 
-// Conflict Detection Engine: Check for overlapping appointments
+/**
+ * Strict Conflict Detection for Dual-Practitioner System:
+ * 2 patients CAN be in the same time slot as long as they are with DIFFERENT dentists!
+ * (e.g. 1 with Dr. Omar, 1 with Dr. Nesrine).
+ * Conflict occurs ONLY if the SAME dentist is already booked in that time range.
+ */
 function checkAppointmentConflict(date, startTime, endTime, dentistId, excludeAppointmentId = null) {
+  if (!dentistId) {
+    throw new Error('Le choix du praticien (Dr. Omar ou Dr. Nesrine) est obligatoire.');
+  }
+
   const startMin = timeToMinutes(startTime);
   const endMin = timeToMinutes(endTime);
 
   let sql = `
     SELECT a.*, d.name as dentiste_nom
     FROM appointments a
-    LEFT JOIN dentists d ON a.dentiste_id = d.id
+    JOIN dentists d ON a.dentiste_id = d.id
     WHERE a.date = ?
+      AND a.dentiste_id = ?
       AND a.statut NOT IN ('Annulé', 'Reporté')
   `;
-  const params = [date];
+  const params = [date, Number(dentistId)];
 
   if (excludeAppointmentId) {
     sql += ` AND a.id != ?`;
@@ -242,14 +294,7 @@ function checkAppointmentConflict(date, startTime, endTime, dentistId, excludeAp
     const rdvEnd = timeToMinutes(rdv.heure_fin);
 
     const hasTimeOverlap = startMin < rdvEnd && endMin > rdvStart;
-    if (!hasTimeOverlap) continue;
-
-    const dentistConflict =
-      !dentistId ||
-      !rdv.dentiste_id ||
-      Number(dentistId) === Number(rdv.dentiste_id);
-
-    if (dentistConflict) {
+    if (hasTimeOverlap) {
       return {
         hasConflict: true,
         conflictingWith: {
@@ -258,7 +303,7 @@ function checkAppointmentConflict(date, startTime, endTime, dentistId, excludeAp
           heure_debut: rdv.heure_debut,
           heure_fin: rdv.heure_fin,
           motif: rdv.motif,
-          dentiste: rdv.dentiste_nom || 'Non spécifié (Cabinet entier)'
+          dentiste: rdv.dentiste_nom
         }
       };
     }
@@ -318,6 +363,8 @@ module.exports = {
   DB_PATH,
   BACKUP_DIR,
   initSchema,
+  setupDoctorsAndReset,
+  resetAllAppointments,
   createAutoBackup,
   checkpointWAL,
   calculateEndTime,
